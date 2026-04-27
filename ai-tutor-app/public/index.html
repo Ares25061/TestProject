@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AI-преподаватель</title>
+    <link rel="stylesheet" href="/styles.css?v=4" />
+  </head>
+  <body>
+    <div class="app-shell">
+      <header class="app-topbar">
+        <a class="brand" href="/tutor" aria-label="AI-преподаватель">
+          <span class="brand-mark">AI</span>
+          <span class="brand-title">AI-преподаватель</span>
+        </a>
+        <div class="topbar-meta">
+          <span class="model-badge" id="modelBadge">OpenAI · gpt-5.5</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <aside class="settings-panel" aria-label="Настройки общения">
+          <section class="control-block">
+            <span class="control-title">Режим</span>
+            <div class="segmented" role="group" aria-label="Режим общения">
+              <button class="segment segment-active" id="textModeButton" type="button">
+                Текст
+              </button>
+              <button class="segment" id="voiceModeButton" type="button">Голос</button>
+            </div>
+          </section>
+
+          <label class="field">
+            <span>Язык</span>
+            <select id="languageSelect">
+              <option value="ru-RU">Русский</option>
+              <option value="en-US">English</option>
+              <option value="de-DE">Deutsch</option>
+              <option value="es-ES">Español</option>
+              <option value="fr-FR">Français</option>
+              <option value="it-IT">Italiano</option>
+            </select>
+          </label>
+
+          <label class="toggle-row">
+            <input id="speakRepliesToggle" type="checkbox" />
+            <span>Озвучивать ответы</span>
+          </label>
+
+          <section class="control-block">
+            <span class="control-title">TTS</span>
+            <div class="segmented" role="group" aria-label="Провайдер TTS">
+              <button class="segment segment-active" id="serverTtsButton" type="button">
+                OpenAI
+              </button>
+              <button class="segment" id="browserTtsButton" type="button">Браузер</button>
+            </div>
+            <div class="segmented" role="group" aria-label="Пол голоса">
+              <button class="segment segment-active" id="femaleVoiceButton" type="button">
+                Женский
+              </button>
+              <button class="segment" id="maleVoiceButton" type="button">Мужской</button>
+            </div>
+          </section>
+
+          <label class="field">
+            <span>Голос</span>
+            <select id="voiceSelect"></select>
+          </label>
+
+          <p class="panel-note">Голос синтезируется ИИ.</p>
+
+          <section class="control-block">
+            <span class="control-title">Микрофон</span>
+            <button class="secondary-button full-width-button" id="micPermissionButton" type="button">
+              Разрешить микрофон
+            </button>
+            <p class="panel-note" id="micPermissionStatus">Разрешение еще не проверялось.</p>
+          </section>
+
+          <p class="panel-note" id="speechSupportNote" hidden></p>
+        </aside>
+
+        <section class="chat-panel" aria-label="Диалог с AI-преподавателем">
+          <div class="chat-head">
+            <div>
+              <span class="eyebrow">Учебный диалог</span>
+              <h1>Разбираем задачу шаг за шагом</h1>
+            </div>
+            <button class="secondary-button" id="clearChatButton" type="button">
+              Очистить
+            </button>
+          </div>
+
+          <div class="messages" id="messages" aria-live="polite"></div>
+
+          <form class="composer" id="composer">
+            <div class="selected-files" id="selectedFiles"></div>
+            <textarea
+              id="messageInput"
+              rows="3"
+              placeholder="Напишите вопрос, условие или свою попытку решения..."
+            ></textarea>
+            <div class="composer-actions">
+              <input id="fileInput" type="file" multiple hidden />
+              <button class="secondary-button" id="fileButton" type="button">Файл</button>
+              <button class="secondary-button" id="micButton" type="button">Микрофон</button>
+              <button class="secondary-button" id="stopButton" type="button" hidden>
+                Стоп
+              </button>
+              <button class="primary-button" id="sendButton" type="submit">Отправить</button>
+            </div>
+            <p class="status-line" id="statusLine"></p>
+          </form>
+        </section>
+      </main>
+    </div>
+
+    <script src="/app.js?v=4" type="module"></script>
+  </body>
+</html>
