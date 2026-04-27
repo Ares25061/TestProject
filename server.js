@@ -1,24 +1,27 @@
+import { randomUUID } from "node:crypto";
 import { createReadStream, existsSync, readFileSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { extname, join, normalize, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { EdgeTTS } from "node-edge-tts";
 import {
   DEFAULT_MODEL,
-  buildOpenAiResponseRequest,
-  extractTextFromSseEvent,
-  getOpenAiErrorMessage,
+  buildOpenRouterChatRequest,
+  extractTextFromOpenRouterSseEvent,
+  getProviderErrorMessage,
   normalizeMessages,
-} from "./src/openai-payload.js";
+} from "./src/openrouter-payload.js";
 
 const __dirname = fileURLToPath(new URL(".", import.meta.url));
 const publicDir = resolve(__dirname, "public");
+const ttsTempDir = resolve(__dirname, "output", "tts");
 const maxJsonBodyBytes = 12 * 1024 * 1024;
 const maxTtsChars = 1_200;
-const openAiBaseUrl = "https://api.openai.com/v1";
-const openAiResponsesUrl = `${openAiBaseUrl}/responses`;
-const openAiSpeechUrl = `${openAiBaseUrl}/audio/speech`;
-const defaultTtsModel = "gpt-4o-mini-tts";
+const openRouterChatUrl = "https://openrouter.ai/api/v1/chat/completions";
+const defaultTtsModel = "edge-tts";
+const edgeTtsVoices = new Set(["ru-RU-SvetlanaNeural", "ru-RU-DmitryNeural"]);
+const defaultEdgeTtsVoice = "ru-RU-SvetlanaNeural";
 
 const contentTypes = {
   ".css": "text/css; charset=utf-8",
@@ -103,7 +106,7 @@ function readJsonBody(request) {
   });
 }
 
-async function streamOpenAiToResponse(upstreamBody, response) {
+async function streamOpenRouterToResponse(upstreamBody, response) {
   const reader = upstreamBody.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -120,7 +123,7 @@ async function streamOpenAiToResponse(upstreamBody, response) {
 
     for (const event of events) {
       try {
-        const text = extractTextFromSseEvent(event);
+        const text = extractTextFromOpenRouterSseEvent(event);
         if (text && !response.destroyed) {
           response.write(text);
         }
@@ -132,7 +135,7 @@ async function streamOpenAiToResponse(upstreamBody, response) {
 
   if (buffer.trim() && !response.destroyed) {
     try {
-      const text = extractTextFromSseEvent(buffer);
+      const text = extractTextFromOpenRouterSseEvent(buffer);
       if (text) {
         response.write(text);
       }
@@ -146,25 +149,48 @@ async function streamOpenAiToResponse(upstreamBody, response) {
   }
 }
 
-function getApiKey() {
-  return process.env.OPENAI_API_KEY?.trim() ?? "";
+function getOpenRouterApiKey() {
+  return process.env.OPENROUTER_API_KEY?.trim() ?? "";
 }
 
 function getChatModel() {
-  return process.env.OPENAI_MODEL?.trim() || DEFAULT_MODEL;
+  return process.env.OPENROUTER_MODEL?.trim() || DEFAULT_MODEL;
 }
 
 function getReasoningEffort() {
-  const value = process.env.OPENAI_REASONING_EFFORT?.trim().toLowerCase() || "";
+  const value = process.env.OPENROUTER_REASONING_EFFORT?.trim().toLowerCase() || "";
   return ["minimal", "low", "medium", "high", "xhigh"].includes(value) ? value : "";
 }
 
+function getOpenRouterHeaders(apiKey) {
+  const headers = {
+    Authorization: `Bearer ${apiKey}`,
+    "Content-Type": "application/json",
+  };
+  const referer = process.env.OPENROUTER_SITE_URL?.trim() || process.env.APP_PUBLIC_URL?.trim();
+  const title = process.env.OPENROUTER_APP_TITLE?.trim();
+
+  if (referer) {
+    headers["HTTP-Referer"] = referer;
+  }
+
+  if (title) {
+    headers["X-Title"] = title;
+  }
+
+  return headers;
+}
+
+function getTtsModel() {
+  return defaultTtsModel;
+}
+
 async function handleChat(request, response) {
-  const apiKey = getApiKey();
+  const apiKey = getOpenRouterApiKey();
   if (!apiKey) {
     sendJson(response, 500, {
       error:
-        "OPENAI_API_KEY не задан на сервере. Создайте API key на platform.openai.com, добавьте его в .env и перезапустите сервер.",
+        "OPENROUTER_API_KEY не задан на сервере. Создайте ключ на openrouter.ai, добавьте его в .env и перезапустите сервер.",
     });
     return;
   }
@@ -188,24 +214,21 @@ async function handleChat(request, response) {
     return;
   }
 
-  const payload = buildOpenAiResponseRequest({
+  const payload = buildOpenRouterChatRequest({
     attachments: body?.attachments,
     messages,
     model: getChatModel(),
     reasoningEffort: getReasoningEffort(),
   });
 
-  const upstream = await fetch(openAiResponsesUrl, {
+  const upstream = await fetch(openRouterChatUrl, {
     body: JSON.stringify(payload),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
+    headers: getOpenRouterHeaders(apiKey),
     method: "POST",
   }).catch((error) => ({ networkError: error }));
 
   if (upstream.networkError) {
-    sendJson(response, 502, { error: "Не удалось подключиться к OpenAI API." });
+    sendJson(response, 502, { error: "Не удалось подключиться к OpenRouter API." });
     return;
   }
 
@@ -220,8 +243,8 @@ async function handleChat(request, response) {
 
     sendJson(response, upstream.status || 502, {
       error:
-        getOpenAiErrorMessage(parsed) ||
-        "OpenAI API не вернул потоковый ответ.",
+        getProviderErrorMessage(parsed) ||
+        "OpenRouter API не вернул потоковый ответ.",
     });
     return;
   }
@@ -232,28 +255,12 @@ async function handleChat(request, response) {
     "X-Accel-Buffering": "no",
   });
 
-  await streamOpenAiToResponse(upstream.body, response);
+  await streamOpenRouterToResponse(upstream.body, response);
 }
 
 function normalizeTtsVoice(value) {
-  const voice = typeof value === "string" ? value.trim().toLowerCase() : "";
-  const allowedVoices = new Set([
-    "alloy",
-    "ash",
-    "ballad",
-    "cedar",
-    "coral",
-    "echo",
-    "fable",
-    "marin",
-    "nova",
-    "onyx",
-    "sage",
-    "shimmer",
-    "verse",
-  ]);
-
-  return allowedVoices.has(voice) ? voice : "marin";
+  const voice = typeof value === "string" ? value.trim() : "";
+  return edgeTtsVoices.has(voice) ? voice : defaultEdgeTtsVoice;
 }
 
 function normalizeTtsInput(value) {
@@ -265,12 +272,6 @@ function normalizeTtsInput(value) {
 }
 
 async function handleTts(request, response) {
-  const apiKey = getApiKey();
-  if (!apiKey) {
-    sendJson(response, 500, { error: "OPENAI_API_KEY не задан." });
-    return;
-  }
-
   let body;
   try {
     body = await readJsonBody(request);
@@ -286,63 +287,42 @@ async function handleTts(request, response) {
   }
 
   const voice = normalizeTtsVoice(body?.voice);
-  const ttsModel = process.env.OPENAI_TTS_MODEL?.trim() || defaultTtsModel;
-  const upstream = await fetch(openAiSpeechUrl, {
-    body: JSON.stringify({
-      input,
-      instructions:
-        "Говори естественно, тепло и спокойно, как внимательный преподаватель. Не звучать как диктор новостей. Сохраняй язык исходного текста.",
-      model: ttsModel,
-      response_format: "mp3",
+  const proxy = process.env.EDGE_TTS_PROXY?.trim() || undefined;
+  const audioPath = join(ttsTempDir, `${randomUUID()}.mp3`);
+  let audio;
+
+  try {
+    await mkdir(ttsTempDir, { recursive: true });
+    const tts = new EdgeTTS({
+      lang: "ru-RU",
+      outputFormat: "audio-24khz-48kbitrate-mono-mp3",
+      pitch: "default",
+      proxy,
+      rate: "default",
+      timeout: 30_000,
+      volume: "default",
       voice,
-    }),
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-    method: "POST",
-  }).catch((error) => ({ networkError: error }));
-
-  if (upstream.networkError) {
-    sendJson(response, 502, { error: "Не удалось подключиться к OpenAI TTS." });
-    return;
-  }
-
-  if (!upstream.ok || !upstream.body) {
-    const payloadText = await upstream.text().catch(() => "");
-    let parsed = null;
-    try {
-      parsed = payloadText ? JSON.parse(payloadText) : null;
-    } catch {
-      parsed = null;
-    }
-
-    sendJson(response, upstream.status || 502, {
-      error:
-        getOpenAiErrorMessage(parsed) ||
-        "OpenAI TTS не вернул аудио.",
+    });
+    await tts.ttsPromise(input, audioPath);
+    audio = await readFile(audioPath);
+  } catch (error) {
+    const message = typeof error === "string" ? error : error?.message;
+    sendJson(response, 502, {
+      error: message
+        ? `Edge TTS не смог озвучить текст: ${message}`
+        : "Edge TTS не смог озвучить текст.",
     });
     return;
+  } finally {
+    await rm(audioPath, { force: true }).catch(() => undefined);
   }
 
-  const contentType = upstream.headers.get("content-type") || "audio/mpeg";
   response.writeHead(200, {
     "Cache-Control": "no-store",
-    "Content-Type": contentType,
+    "Content-Length": audio.byteLength,
+    "Content-Type": "audio/mpeg",
   });
-
-  const reader = upstream.body.getReader();
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done || response.destroyed) {
-      break;
-    }
-    response.write(Buffer.from(value));
-  }
-
-  if (!response.destroyed) {
-    response.end();
-  }
+  response.end(audio);
 }
 
 function resolveStaticPath(pathname) {
@@ -389,11 +369,12 @@ const server = createServer(async (request, response) => {
   try {
     if (request.method === "GET" && url.pathname === "/api/health") {
       sendJson(response, 200, {
-        hasApiKey: Boolean(getApiKey()),
+        hasApiKey: Boolean(getOpenRouterApiKey()),
+        hasServerTts: true,
         model: getChatModel(),
         ok: true,
-        provider: "OpenAI",
-        ttsModel: process.env.OPENAI_TTS_MODEL?.trim() || defaultTtsModel,
+        provider: "OpenRouter",
+        ttsModel: getTtsModel(),
       });
       return;
     }

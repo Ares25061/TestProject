@@ -1,4 +1,4 @@
-export const DEFAULT_MODEL = "gpt-5.5";
+export const DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free";
 
 const MAX_HISTORY_MESSAGES = 14;
 const MAX_MESSAGE_CHARS = 12_000;
@@ -156,9 +156,10 @@ function buildLastUserContent(userText, attachments) {
         )}). Используй его как контекст задания, но не решай работу за ученика.`,
       );
       contentParts.push({
-        detail: "auto",
-        image_url: attachment.dataUrl,
-        type: "input_image",
+        image_url: {
+          url: attachment.dataUrl,
+        },
+        type: "image_url",
       });
       continue;
     }
@@ -170,9 +171,11 @@ function buildLastUserContent(userText, attachments) {
         )}). Используй его как контекст задания, но не выполняй задание целиком.`,
       );
       contentParts.push({
-        file_data: attachment.dataUrl,
-        filename: attachment.name,
-        type: "input_file",
+        file: {
+          file_data: attachment.dataUrl,
+          filename: attachment.name,
+        },
+        type: "file",
       });
       continue;
     }
@@ -187,13 +190,13 @@ function buildLastUserContent(userText, attachments) {
   return [
     {
       text: textBlocks.filter(Boolean).join("\n\n"),
-      type: "input_text",
+      type: "text",
     },
     ...contentParts,
   ];
 }
 
-export function buildOpenAiInput(messages, attachments) {
+export function buildOpenRouterMessages(messages, attachments) {
   const normalizedMessages = normalizeMessages(messages);
   const normalizedAttachments = normalizeAttachments(attachments);
   const lastUserIndex = normalizedMessages.findLastIndex((message) => message.role === "user");
@@ -213,16 +216,27 @@ export function buildOpenAiInput(messages, attachments) {
   });
 }
 
-export function buildOpenAiResponseRequest({
+function hasPdfData(attachments) {
+  return normalizeAttachments(attachments).some(
+    (attachment) => attachment.kind === "pdf" && attachment.dataUrl,
+  );
+}
+
+export function buildOpenRouterChatRequest({
   attachments,
   messages,
   model,
   reasoningEffort,
 }) {
   const request = {
-    input: buildOpenAiInput(messages, attachments),
-    instructions: TUTOR_SYSTEM_PROMPT,
-    max_output_tokens: 900,
+    max_tokens: 900,
+    messages: [
+      {
+        content: TUTOR_SYSTEM_PROMPT,
+        role: "system",
+      },
+      ...buildOpenRouterMessages(messages, attachments),
+    ],
     model: model || DEFAULT_MODEL,
     stream: true,
   };
@@ -231,10 +245,21 @@ export function buildOpenAiResponseRequest({
     request.reasoning = { effort: reasoningEffort };
   }
 
+  if (hasPdfData(attachments)) {
+    request.plugins = [
+      {
+        id: "file-parser",
+        pdf: {
+          engine: "cloudflare-ai",
+        },
+      },
+    ];
+  }
+
   return request;
 }
 
-export function extractTextFromSseEvent(eventText) {
+export function extractTextFromOpenRouterSseEvent(eventText) {
   const chunks = [];
   const lines = eventText
     .split(/\r?\n/)
@@ -249,23 +274,20 @@ export function extractTextFromSseEvent(eventText) {
 
     const parsed = JSON.parse(data);
     if (parsed?.error?.message) {
-      chunks.push(`\n\nОшибка OpenAI: ${parsed.error.message}`);
+      chunks.push(`\n\nОшибка OpenRouter: ${parsed.error.message}`);
       continue;
     }
 
-    if (
-      (parsed?.type === "response.output_text.delta" ||
-        parsed?.type === "response.refusal.delta") &&
-      typeof parsed.delta === "string"
-    ) {
-      chunks.push(parsed.delta);
+    const content = parsed?.choices?.[0]?.delta?.content;
+    if (typeof content === "string") {
+      chunks.push(content);
     }
   }
 
   return chunks.join("");
 }
 
-export function getOpenAiErrorMessage(payload) {
+export function getProviderErrorMessage(payload) {
   if (!payload || typeof payload !== "object") {
     return null;
   }
@@ -275,7 +297,20 @@ export function getOpenAiErrorMessage(payload) {
   }
 
   if (payload.error && typeof payload.error === "object") {
-    return typeof payload.error.message === "string" ? payload.error.message : null;
+    const message = typeof payload.error.message === "string" ? payload.error.message : "";
+    const raw = payload.error.metadata;
+    const rawMessage =
+      raw && typeof raw === "object" && typeof raw.raw === "string" ? raw.raw : "";
+
+    if (rawMessage && (!message || message === "Provider returned error")) {
+      return rawMessage;
+    }
+
+    if (message && rawMessage) {
+      return `${message}: ${rawMessage}`;
+    }
+
+    return message || null;
   }
 
   return null;

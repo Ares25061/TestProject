@@ -7,20 +7,17 @@ const languageOptions = [
   { label: "Italiano", value: "it-IT" },
 ];
 
-const openAiVoices = [
-  { gender: "female", label: "Marin - естественный преподаватель", value: "marin" },
-  { gender: "female", label: "Coral - теплый голос", value: "coral" },
-  { gender: "female", label: "Nova - мягкий голос", value: "nova" },
-  { gender: "female", label: "Shimmer - светлый голос", value: "shimmer" },
-  { gender: "female", label: "Sage - спокойный голос", value: "sage" },
-  { gender: "male", label: "Cedar - естественный преподаватель", value: "cedar" },
-  { gender: "male", label: "Onyx - уверенный голос", value: "onyx" },
-  { gender: "male", label: "Echo - разговорный голос", value: "echo" },
-  { gender: "male", label: "Ash - низкий голос", value: "ash" },
-  { gender: "male", label: "Fable - выразительный голос", value: "fable" },
-  { gender: "neutral", label: "Alloy - нейтральный", value: "alloy" },
-  { gender: "neutral", label: "Ballad - мягкий рассказчик", value: "ballad" },
-  { gender: "neutral", label: "Verse - выразительный", value: "verse" },
+const serverTtsVoices = [
+  {
+    gender: "female",
+    label: "Svetlana Neural - русский женский",
+    value: "ru-RU-SvetlanaNeural",
+  },
+  {
+    gender: "male",
+    label: "Dmitry Neural - русский мужской",
+    value: "ru-RU-DmitryNeural",
+  },
 ];
 
 const maxAttachmentCount = 5;
@@ -243,9 +240,9 @@ function getFilteredBrowserVoices() {
   return genderMatches.length > 0 ? genderMatches : rankedSource;
 }
 
-function getFilteredOpenAiVoices() {
-  const genderMatches = openAiVoices.filter((voice) => voice.gender === state.gender);
-  return [...genderMatches, ...openAiVoices.filter((voice) => voice.gender === "neutral")];
+function getFilteredServerTtsVoices() {
+  const genderMatches = serverTtsVoices.filter((voice) => voice.gender === state.gender);
+  return [...genderMatches, ...serverTtsVoices.filter((voice) => voice.gender === "neutral")];
 }
 
 function getSelectedBrowserVoice() {
@@ -262,7 +259,7 @@ function renderVoiceOptions() {
 
   if (state.ttsProvider === "server") {
     elements.voiceSelect.disabled = false;
-    for (const voice of getFilteredOpenAiVoices()) {
+    for (const voice of getFilteredServerTtsVoices()) {
       const option = document.createElement("option");
       option.textContent = voice.label;
       option.value = voice.value;
@@ -298,7 +295,7 @@ function loadVoices() {
     }
     elements.speechSupportNote.hidden = false;
     elements.speechSupportNote.textContent =
-      "Браузерный TTS недоступен, но OpenAI TTS может работать через сервер.";
+      "Браузерный TTS недоступен, но серверный TTS может работать через API.";
     return;
   }
 
@@ -367,10 +364,10 @@ function playAudioBlob(blob) {
   });
 }
 
-async function speakWithOpenAi(text) {
+async function speakWithServerTts(text) {
   const controller = new AbortController();
   ttsAbortController = controller;
-  const fallbackVoice = state.gender === "male" ? "cedar" : "marin";
+  const fallbackVoice = state.gender === "male" ? "ru-RU-DmitryNeural" : "ru-RU-SvetlanaNeural";
   const response = await fetch("/api/tts", {
     body: JSON.stringify({
       text,
@@ -385,7 +382,7 @@ async function speakWithOpenAi(text) {
 
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error || "OpenAI TTS не сработал.");
+    throw new Error(payload?.error || "Серверный TTS не сработал.");
   }
 
   await playAudioBlob(await response.blob());
@@ -423,11 +420,11 @@ function speakText(text) {
       .then(async () => {
         if (state.ttsProvider === "server") {
           try {
-            await speakWithOpenAi(part);
+            await speakWithServerTts(part);
             return;
           } catch (error) {
             console.warn(error);
-            setStatus("OpenAI TTS не сработал, использую браузерный голос.");
+            setStatus("Серверный TTS не сработал, использую браузерный голос.");
           }
         }
 
@@ -565,6 +562,10 @@ function setMode(mode) {
 }
 
 function setTtsProvider(provider) {
+  if (provider === "server" && elements.serverTtsButton.disabled) {
+    return;
+  }
+
   state.ttsProvider = provider;
   elements.serverTtsButton.classList.toggle("segment-active", provider === "server");
   elements.browserTtsButton.classList.toggle("segment-active", provider === "browser");
@@ -857,11 +858,19 @@ async function loadHealth() {
 
   const payload = await response.json().catch(() => null);
   if (payload?.model) {
-    elements.modelBadge.textContent = `${payload.provider || "OpenAI"} · ${payload.model}`;
+    elements.modelBadge.textContent = `${payload.provider || "OpenRouter"} · ${payload.model}`;
   }
 
   if (payload && !payload.hasApiKey) {
-    setStatus("Добавьте OPENAI_API_KEY в .env и перезапустите сервер.");
+    setStatus("Добавьте OPENROUTER_API_KEY в .env и перезапустите сервер.");
+  }
+
+  if (payload && !payload.hasServerTts) {
+    elements.serverTtsButton.disabled = true;
+    elements.serverTtsButton.title = "Серверный Edge TTS сейчас недоступен.";
+    if (state.ttsProvider === "server") {
+      setTtsProvider("browser");
+    }
   }
 }
 

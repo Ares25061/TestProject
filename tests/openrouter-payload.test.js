@@ -1,12 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  DEFAULT_MODEL,
   TUTOR_SYSTEM_PROMPT,
-  buildOpenAiInput,
-  buildOpenAiResponseRequest,
-  extractTextFromSseEvent,
+  buildOpenRouterChatRequest,
+  buildOpenRouterMessages,
+  extractTextFromOpenRouterSseEvent,
+  getProviderErrorMessage,
   normalizeMessages,
-} from "../src/openai-payload.js";
+} from "../src/openrouter-payload.js";
+
+test("uses the OpenRouter free Gemma model by default", () => {
+  assert.equal(DEFAULT_MODEL, "google/gemma-4-26b-a4b-it:free");
+});
 
 test("system prompt forbids solving instead of the student", () => {
   assert.match(TUTOR_SYSTEM_PROMPT, /Не выдавай готовое решение/);
@@ -25,7 +31,7 @@ test("normalizes unsafe or empty messages", () => {
 });
 
 test("adds text attachments to the last user message", () => {
-  const messages = buildOpenAiInput(
+  const messages = buildOpenRouterMessages(
     [{ role: "user", content: "Помоги понять условие" }],
     [
       {
@@ -39,13 +45,13 @@ test("adds text attachments to the last user message", () => {
   );
 
   assert.equal(messages[0].role, "user");
-  assert.equal(messages[0].content[0].type, "input_text");
+  assert.equal(messages[0].content[0].type, "text");
   assert.match(messages[0].content[0].text, /task\.txt/);
   assert.match(messages[0].content[0].text, /Найти корни/);
 });
 
-test("adds PDF attachments as Responses API input files", () => {
-  const request = buildOpenAiResponseRequest({
+test("adds PDF attachments as OpenRouter file content", () => {
+  const request = buildOpenRouterChatRequest({
     attachments: [
       {
         dataUrl: "data:application/pdf;base64,JVBERi0x",
@@ -56,22 +62,38 @@ test("adds PDF attachments as Responses API input files", () => {
       },
     ],
     messages: [{ role: "user", content: "Что в файле?" }],
-    model: "gpt-5.5",
+    model: "google/gemma-4-26b-a4b-it:free",
   });
 
   assert.equal(request.stream, true);
-  assert.equal(request.input[0].content[1].type, "input_file");
-  assert.equal(request.input[0].content[1].filename, "task.pdf");
+  assert.equal(request.messages[0].role, "system");
+  assert.equal(request.messages[1].content[1].type, "file");
+  assert.equal(request.messages[1].content[1].file.filename, "task.pdf");
+  assert.equal(request.plugins[0].pdf.engine, "cloudflare-ai");
 });
 
-test("extracts text from OpenAI Responses SSE chunks", () => {
-  const text = extractTextFromSseEvent(
+test("extracts text from OpenRouter chat completion SSE chunks", () => {
+  const text = extractTextFromOpenRouterSseEvent(
     [
-      'data: {"type":"response.output_text.delta","delta":"При"}',
-      'data: {"type":"response.output_text.delta","delta":"вет"}',
+      'data: {"choices":[{"delta":{"content":"При"}}]}',
+      'data: {"choices":[{"delta":{"content":"вет"}}]}',
       "data: [DONE]",
     ].join("\n"),
   );
 
   assert.equal(text, "Привет");
+});
+
+test("prefers detailed OpenRouter provider errors when present", () => {
+  assert.equal(
+    getProviderErrorMessage({
+      error: {
+        message: "Provider returned error",
+        metadata: {
+          raw: "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream.",
+        },
+      },
+    }),
+    "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream.",
+  );
 });

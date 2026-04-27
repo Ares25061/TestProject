@@ -6,9 +6,12 @@
   "scripts": {
     "start": "node server.js",
     "test": "node --test tests/*.test.js",
-    "check": "node --check server.js && node --check src/openai-payload.js && node --check public/app.js"
+    "check": "node --check server.js && node --check src/openrouter-payload.js && node --check public/app.js"
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "node-edge-tts": "^1.2.10"
   }
 }
